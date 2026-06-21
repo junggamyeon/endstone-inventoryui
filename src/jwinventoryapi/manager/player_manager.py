@@ -22,5 +22,7 @@ def create_session(player: Player) -> 'Session':
 
 def close_session(player: Player):
     session = sessions.pop(player.unique_id, None)
-    if session is not None and session.menu is not None:
-        session.menu._remove_session(session)
+    if session is not None:
+        if session.menu is not None:
+            session.menu._remove_session(session)
+        session.close()
