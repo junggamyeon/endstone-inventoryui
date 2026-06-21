@@ -30,11 +30,9 @@ class Session:
         NONE = 0
         GRAPHIC_SENT = 1
         GRAPHIC_RECEIVED = 2
-        GRAPHIC_DATA_SENT = 3
-        GRAPHIC_DATA_RECEIVED = 4
-        OPENING = 5
-        OPEN = 6
-        CLOSING = 7
+        OPENING = 3
+        OPEN = 4
+        CLOSING = 5
 
     def __init__(self, player: Player):
         self.player: Player = player
@@ -77,12 +75,8 @@ class Session:
 
     def _send_graphic(self):
         self.graphic.send(self.player)
-        self.state = self.State.GRAPHIC_SENT
-        self.ack_timestamp = send_ack_packet(self.player)
-
-    def _send_graphic_data(self):
         self.graphic.send_data(self.player)
-        self.state = self.State.GRAPHIC_DATA_SENT
+        self.state = self.State.GRAPHIC_SENT
         self.ack_timestamp = send_ack_packet(self.player)
 
     def open(self):
@@ -129,8 +123,6 @@ class Session:
         self.state = state
         match state:
             case self.State.GRAPHIC_RECEIVED:
-                self._send_graphic_data()
-            case self.State.GRAPHIC_DATA_RECEIVED:
                 self.open()
             case self.State.OPEN:
                 self.send_contents()

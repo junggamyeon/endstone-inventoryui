@@ -1,9 +1,6 @@
 from typing import overload, Callable
-
 from endstone.inventory import ItemStack
-
 from jwinventoryapi.util.item_utils import clone_item
-
 
 class UIInventory:
 

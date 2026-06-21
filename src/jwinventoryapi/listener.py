@@ -71,8 +71,6 @@ class EventListener:
         match session.state:
             case Session.State.GRAPHIC_SENT:
                 session.update_state(Session.State.GRAPHIC_RECEIVED)
-            case Session.State.GRAPHIC_DATA_SENT:
-                session.update_state(Session.State.GRAPHIC_DATA_RECEIVED)
             case Session.State.OPENING:
                 if session.open_attempts >= Session.MAX_OPEN_ATTEMPTS:
                     session.close()
