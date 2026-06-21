@@ -7,7 +7,6 @@ from endstone import Player
 
 from jwinventoryapi.network.network_stack_latency_packet import NetworkStackLatencyPacket
 
-
 def send_ack_packet(player: Player) -> int:
     timestamp = random.randint(1, 32767)
     pk = NetworkStackLatencyPacket(timestamp, True)
