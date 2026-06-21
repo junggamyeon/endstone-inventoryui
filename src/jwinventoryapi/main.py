@@ -1,5 +1,4 @@
 from endstone.plugin import Plugin
-
 from jwinventoryapi.listener import EventListener
 
 
