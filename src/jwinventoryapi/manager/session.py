@@ -23,7 +23,7 @@ _PLAYER_CONTAINER_ID = 28
 
 
 class Session:
-    CONTAINER_ID: int = 200
+    CONTAINER_ID: int = 2
     MAX_OPEN_ATTEMPTS: int = 10
 
     class State(Enum):
@@ -86,14 +86,12 @@ class Session:
 
     def send_contents(self):
         inventory = self.menu.inventory
-        pk = InventoryContentPacket(self.CONTAINER_ID)
         for i in range(inventory.size):
             item_stack = inventory.get_item(i)
-            if is_air(item_stack):
-                pk.items.append(ItemStackWrapper(0, item_stack))
-            else:
-                pk.items.append(ItemStackWrapper(self._alloc_stack_id(), item_stack))
-        self.player.send_packet(pk.get_packet_id(), pk.serialize())
+            if not is_air(item_stack):
+                stack_id = self._alloc_stack_id()
+                pk = InventorySlotPacket(self.CONTAINER_ID, i, item=ItemStackWrapper(stack_id, item_stack))
+                self.player.send_packet(pk.get_packet_id(), pk.serialize())
 
     def send_player_inventory(self):
         player_inv = self.player.inventory
@@ -117,7 +115,10 @@ class Session:
     def close(self):
         self.state = self.State.CLOSING
         if self.graphic is not None:
-            self.graphic.remove(self.player)
+            try:
+                self.graphic.remove(self.player)
+            except RuntimeError:
+                pass
 
     def update_state(self, state: State):
         self.state = state
