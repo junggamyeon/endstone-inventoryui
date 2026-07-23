@@ -20,9 +20,9 @@ def create_session(player: Player) -> 'Session':
     return session
 
 
-def close_session(player: Player):
+def close_session(player: Player, sync_inventory: bool = False):
     session = sessions.pop(player.unique_id, None)
     if session is not None:
         if session.menu is not None:
             session.menu._remove_session(session)
-        session.close()
+        session.close(sync_inventory=sync_inventory)
