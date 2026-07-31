@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "endstone-jwinventoryapi"
 version = "3.0.0"
 dependencies = [
-    "bedrock-protocol-packets-ng==0.0.8"
+    "bedrock-protocol-packets-ng==0.0.9"
 ]
 authors = [
     { name = "Shock95", email = "" },
