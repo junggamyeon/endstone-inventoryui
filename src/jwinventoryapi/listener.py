@@ -1,27 +1,25 @@
 from bedrock_protocol.packets import MinecraftPacketIds
 from bedrock_protocol.packets.enums import ItemStackRequestActionType
-from bedrock_protocol.packets.packet import ContainerClosePacket, ItemRegistryPacket, ItemStackRequestPacket
-from bstream import BinaryStream
+from bedrock_protocol.packets.packet import (
+    ContainerClosePacket,
+    ItemRegistryPacket,
+    ItemStackRequestPacket,
+    ItemStackResponsePacket,
+    NetworkStackLatencyPacket,
+)
+from bedrock_protocol.packets.types.item_stack_response import ItemStackResponse
 from endstone.event import event_handler, EventPriority, PlayerQuitEvent, PacketReceiveEvent, PacketSendEvent
 from endstone.inventory import ItemStack
 from endstone.plugin import Plugin
 
 from .manager import Session
+from .manager.container.item_stack_response_builder import ItemStackResponseBuilder
 from .manager.player_manager import find_session, close_session
+from .network.container_ui_ids import ContainerUIIds
 from .network.network_stack_latency_packet import NetworkStackLatencyPacket
 from .util.item_utils import all_item_data, add_item_data, is_air
 
 _CONTAINER_ENUM_GUI = 7
-_ITEM_STACK_RESPONSE_ID = 148
-
-
-def _build_reject_response(request_ids: list[int]) -> bytes:
-    stream = BinaryStream()
-    stream.write_unsigned_varint(len(request_ids))
-    for rid in request_ids:
-        stream.write_byte(1)  # result = Error/Reject
-        stream.write_varint(rid)
-    return stream.copy_buffer()
 
 
 class EventListener:
@@ -33,9 +31,7 @@ class EventListener:
         player = event.player
         if player is None:
             return
-
         packet_id = event.packet_id
-
         if packet_id == MinecraftPacketIds.Ping:
             self._handle_ping(event)
         elif packet_id == MinecraftPacketIds.ContainerClose:
@@ -43,7 +39,7 @@ class EventListener:
         elif packet_id == MinecraftPacketIds.PacketViolationWarning:
             self._handle_violation_warning(event)
         elif packet_id == MinecraftPacketIds.ItemStackRequest:
-            self._handle_item_stack_request(event)
+            self._handle_item_stack_request_packet(event)
 
     @event_handler
     def on_packet_send(self, event: PacketSendEvent):
@@ -61,16 +57,15 @@ class EventListener:
         session = find_session(event.player)
         if session is None:
             return
-
         pk = NetworkStackLatencyPacket()
         pk.deserialize(event.payload)
-
         if session.ack_timestamp != pk.timestamp:
             return
-
         match session.state:
             case Session.State.GRAPHIC_SENT:
                 session.update_state(Session.State.GRAPHIC_RECEIVED)
+            case Session.State.GRAPHIC_DATA_SENT:
+                session.update_state(Session.State.GRAPHIC_DATA_RECEIVED)
             case Session.State.OPENING:
                 if session.open_attempts >= Session.MAX_OPEN_ATTEMPTS:
                     session.close()
@@ -83,42 +78,73 @@ class EventListener:
         session = find_session(player)
         if session is None:
             return
-
         pk = ContainerClosePacket()
         pk.deserialize(event.payload)
-
         if pk.container_id != Session.CONTAINER_ID:
             return
-
         if session.menu is not None and session.menu._close_listener is not None:
             session.menu._close_listener(player)
-
         if session.pending:
             if session.state != Session.State.CLOSING:
                 session.close()
             session.menu = session.pending.popleft()
             session.send_menu()
         else:
+            session.close(sync_inventory=True)
             close_session(player)
 
     def _handle_violation_warning(self, event: PacketReceiveEvent):
         session = find_session(event.player)
         if session is None:
             return
-
         if session.state == Session.State.OPENING:
             session.update_state(Session.State.OPEN)
             if session.menu is not None and session.menu._open_listener is not None:
                 session.menu._open_listener(event.player)
 
-    def _handle_item_stack_request(self, event: PacketReceiveEvent):
+    def _send_item_stack_responses(self, player, responses: list[ItemStackResponse]) -> None:
+        if not responses:
+            return
+        pk = ItemStackResponsePacket(responses)
+        player.send_packet(pk.get_packet_id(), pk.serialize())
+
+    def _reject_item_stack_request(self, player, session, responses: list[ItemStackResponse], client_request_id: int) -> None:
+        session.container_manager.discard_transaction()
+        responses.append(ItemStackResponseBuilder.build_error(client_request_id))
+        self._send_item_stack_responses(player, responses)
+
+    def _handle_item_stack_request(self, player, session, menu, pk: ItemStackRequestPacket) -> None:
+        responses: list[ItemStackResponse] = []
+        for req_data in pk.request.request_data:
+            session.container_manager.begin_request(req_data.client_request_id)
+            try:
+                for action in req_data.request_actions:
+                    action_type = action.action_type
+                    source = action.action_data.source
+                    destination = action.action_data.distination
+                    if action_type == ItemStackRequestActionType.Drop:
+                        session.container_manager.handle_drop(source, action.action_data.amount)
+                    elif action_type == ItemStackRequestActionType.Swap:
+                        session.container_manager.handle_swap(source, destination)
+                    elif action_type == ItemStackRequestActionType.Take or action_type == ItemStackRequestActionType.Place:
+                        session.container_manager.transfer_items(source, destination, action.action_data.amount)
+                    elif action_type == ItemStackRequestActionType.Destroy:
+                        continue
+                responses.append(session.container_manager.commit_transaction())
+            except Exception as error:
+                self._plugin.logger.debug(f"Error handling item stack request: {error}")
+                self._reject_item_stack_request(player, session, responses, req_data.client_request_id)
+                return
+        self._send_item_stack_responses(player, responses)
+
+    def _handle_item_stack_request_packet(self, event: PacketReceiveEvent):
         player = event.player
         session = find_session(player)
         if session is None or session.state != Session.State.OPEN:
             return
-
+        pk = ItemStackRequestPacket()
+        pk.deserialize(event.payload)
         menu = session.menu
-
         if menu.is_locked:
             self._handle_locked(event, session)
         elif menu.is_editable:
@@ -128,13 +154,14 @@ class EventListener:
 
     def _handle_locked(self, event: PacketReceiveEvent, session: Session):
         event.is_cancelled = True
-        # Send explicit rejection so client snaps items back immediately
         pk = ItemStackRequestPacket()
         pk.deserialize(event.payload)
-        request_ids = [rd.client_request_id for rd in pk.request.request_data]
-        if request_ids:
-            payload = _build_reject_response(request_ids)
-            session.player.send_packet(_ITEM_STACK_RESPONSE_ID, payload)
+        responses = []
+        for req_data in pk.request.request_data:
+            session.container_manager.begin_request(req_data.client_request_id)
+            responses.append(ItemStackResponseBuilder.build_error(req_data.client_request_id))
+            session.container_manager.discard_transaction()
+        self._send_item_stack_responses(session.player, responses)
         session.send_contents()
         session.send_player_inventory()
 
@@ -142,60 +169,44 @@ class EventListener:
         player = event.player
         menu = session.menu
         inv = menu.inventory
-
         pk = ItemStackRequestPacket()
         pk.deserialize(event.payload)
-
         inv.begin_batch()
         try:
             for req_data in pk.request.request_data:
                 for action in req_data.request_actions:
                     action_type = action.action_type
-
                     if action_type == ItemStackRequestActionType.Destroy:
                         continue
-
-                    if action_type not in (
-                        ItemStackRequestActionType.Take,
-                        ItemStackRequestActionType.Place,
-                        ItemStackRequestActionType.Swap,
-                    ):
+                    if action_type not in (ItemStackRequestActionType.Take, ItemStackRequestActionType.Place, ItemStackRequestActionType.Swap):
                         continue
-
                     if action_type == ItemStackRequestActionType.Swap:
                         self._process_swap(action, inv, player)
                     else:
                         self._process_move(action, inv, player)
         finally:
-            inv._dirty_slots.clear()
-            inv._batch_mode = False
-
+            inv.end_batch()
         event.is_cancelled = True
-        request_ids = [rd.client_request_id for rd in pk.request.request_data]
-        if request_ids:
-            payload = _build_reject_response(request_ids)
-            session.player.send_packet(_ITEM_STACK_RESPONSE_ID, payload)
+        responses = []
+        for req_data in pk.request.request_data:
+            session.container_manager.begin_request(req_data.client_request_id)
+            responses.append(ItemStackResponseBuilder.build_error(req_data.client_request_id))
+            session.container_manager.discard_transaction()
+        self._send_item_stack_responses(session.player, responses)
         session.send_contents()
         session.send_player_inventory()
 
     def _handle_click_only(self, event: PacketReceiveEvent, session: Session):
         player = event.player
         menu = session.menu
-
         pk = ItemStackRequestPacket()
         pk.deserialize(event.payload)
-
         for req_data in pk.request.request_data:
             for action in req_data.request_actions:
-                if action.action_type not in (
-                    ItemStackRequestActionType.Take,
-                    ItemStackRequestActionType.Place,
-                ):
+                if action.action_type not in (ItemStackRequestActionType.Take, ItemStackRequestActionType.Place):
                     continue
-
                 src = action.action_data.source
                 source_is_gui = src.container.container_enum == _CONTAINER_ENUM_GUI
-
                 if source_is_gui:
                     item_clicked = menu.inventory.get_item(src.slot)
                     menu._handle_click(player, src.slot, item_clicked)
@@ -203,13 +214,13 @@ class EventListener:
                     if menu._place_listener is not None:
                         item_from_player = player.inventory.get_item(src.slot)
                         menu._place_listener(player, src.slot, item_from_player, menu.inventory)
-
                 event.is_cancelled = True
-                # Reject so client doesn't hold item on cursor
-                request_ids = [rd.client_request_id for rd in pk.request.request_data]
-                if request_ids:
-                    payload = _build_reject_response(request_ids)
-                    session.player.send_packet(_ITEM_STACK_RESPONSE_ID, payload)
+                responses = []
+                for rd in pk.request.request_data:
+                    session.container_manager.begin_request(rd.client_request_id)
+                    responses.append(ItemStackResponseBuilder.build_error(rd.client_request_id))
+                    session.container_manager.discard_transaction()
+                self._send_item_stack_responses(session.player, responses)
                 session.send_contents()
                 session.send_player_inventory()
                 return
@@ -218,10 +229,8 @@ class EventListener:
         src = action.action_data.source
         dst = action.action_data.distination
         count = action.action_data.amount
-
         src_is_gui = src.container.container_enum == _CONTAINER_ENUM_GUI
         dst_is_gui = dst.container.container_enum == _CONTAINER_ENUM_GUI
-
         if src_is_gui and not dst_is_gui:
             self._take_from_gui(inv, player, src.slot, count)
         elif dst_is_gui and not src_is_gui:
@@ -232,10 +241,8 @@ class EventListener:
     def _process_swap(self, action, inv, player):
         src = action.action_data.source
         dst = action.action_data.distination
-
         src_is_gui = src.container.container_enum == _CONTAINER_ENUM_GUI
         dst_is_gui = dst.container.container_enum == _CONTAINER_ENUM_GUI
-
         if src_is_gui and dst_is_gui:
             item_a = inv.get_item(src.slot)
             item_b = inv.get_item(dst.slot)
@@ -256,17 +263,14 @@ class EventListener:
         current = inv.get_item(slot)
         if current is None or is_air(current):
             return
-
         take_count = min(count, current.amount)
         new_amount = current.amount - take_count
-
         if new_amount <= 0:
             inv.set_item(slot, None)
         else:
             updated = ItemStack(current.type.id, new_amount, current.data)
             updated.set_item_meta(current.item_meta)
             inv.set_item(slot, updated)
-
         give_item = ItemStack(current.type.id, take_count, current.data)
         give_item.set_item_meta(current.item_meta)
         player.inventory.add_item(give_item)
@@ -275,10 +279,8 @@ class EventListener:
         player_item = player.inventory.get_item(player_slot)
         if player_item is None or is_air(player_item):
             return
-
         take_count = min(count, player_item.amount)
         existing = inv.get_item(gui_slot)
-
         if existing is not None and not is_air(existing):
             if existing.type.id == player_item.type.id:
                 cap = min(inv.max_stack_size, existing.max_stack_size)
@@ -296,7 +298,6 @@ class EventListener:
             placed = ItemStack(player_item.type.id, take_count, player_item.data)
             placed.set_item_meta(player_item.item_meta)
             inv.set_item(gui_slot, placed)
-
         new_player_amount = player_item.amount - take_count
         if new_player_amount <= 0:
             player.inventory.set_item(player_slot, None)
@@ -309,10 +310,8 @@ class EventListener:
         current = inv.get_item(src_slot)
         if current is None or is_air(current):
             return
-
         take_count = min(count, current.amount)
         existing_dst = inv.get_item(dst_slot)
-
         new_src_amount = current.amount - take_count
         if new_src_amount <= 0:
             inv.set_item(src_slot, None)
@@ -320,7 +319,6 @@ class EventListener:
             updated_src = ItemStack(current.type.id, new_src_amount, current.data)
             updated_src.set_item_meta(current.item_meta)
             inv.set_item(src_slot, updated_src)
-
         if existing_dst is not None and not is_air(existing_dst) and existing_dst.type.id == current.type.id:
             cap = min(inv.max_stack_size, existing_dst.max_stack_size)
             merged_amount = min(existing_dst.amount + take_count, cap)
