@@ -1,6 +1,6 @@
 from endstone.inventory import ItemStack
 
-from jwinventoryapi.manager.container.container_adapter import ContainerAdapter
+from jwinventoryapi.manager.container_manager.container_adapter import ContainerAdapter
 from jwinventoryapi.util.item_utils import is_air, clone_item
 
 
