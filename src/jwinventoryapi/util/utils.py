@@ -1,11 +1,11 @@
 import math
 import random
 
-from bedrock_protocol.packets.packet import UpdateBlockPacket
+from bedrock_protocol.packets.packet import UpdateBlockPacket, NetworkStackLatencyPacket
 from bedrock_protocol.packets.types import BlockPos
-from endstone import Player
+from endstone import Player, Server
 
-from jwinventoryapi.network.network_stack_latency_packet import NetworkStackLatencyPacket
+server: Server | None = None
 
 def send_ack_packet(player: Player) -> int:
     timestamp = random.randint(1, 32767)
@@ -22,10 +22,16 @@ def send_block(player: Player, name: str, pos: BlockPos):
 
 def get_block_behind(player: Player, distance: int = 1) -> BlockPos:
     location = player.location
-    yaw_rad = math.radians(location.yaw + 180)
-    x = location.x - math.sin(yaw_rad) * distance
-    z = location.z + math.cos(yaw_rad) * distance
-    return BlockPos(math.floor(x), math.floor(location.y + 1), math.floor(z))
+    yaw = location.yaw
+    behind_yaw = yaw + 180
+    yaw_rad = math.radians(behind_yaw)
+    x = -math.sin(yaw_rad) * distance
+    z = math.cos(yaw_rad) * distance
+    behind_x = location.x + x
+    behind_y = location.y + 1
+    behind_z = location.z + z
+
+    return BlockPos(math.floor(behind_x), math.floor(behind_y), math.floor(behind_z))
 
 
 def west(pos: BlockPos) -> BlockPos:
