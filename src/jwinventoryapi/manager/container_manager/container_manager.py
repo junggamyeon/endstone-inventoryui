@@ -14,7 +14,7 @@ from .item_stack_response_builder import ItemStackResponseBuilder
 from .item_stack_tracker import ItemStackTracker
 
 if TYPE_CHECKING:
-    from jwinventoryapi.menu.menu_inventory import MenuInventory
+    from jwinventoryapi.menu import Menu
 
 
 class ContainerManager:
