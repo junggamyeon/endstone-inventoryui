@@ -6,7 +6,7 @@ from bedrock_protocol.packets.types import BlockPos
 from endstone import Player
 from endstone.inventory import ItemStack
 
-from jwinventoryapi.manager.container.container_manager import ContainerManager
+from jwinventoryapi.manager.container_manager.container_manager import ContainerManager
 from jwinventoryapi.menu.graphic.block_graphic import BlockGraphic
 from jwinventoryapi.menu.graphic.block_pair_graphic import BlockPairGraphic
 from jwinventoryapi.menu.graphic.graphic import Graphic
@@ -21,6 +21,7 @@ from jwinventoryapi.util.item_utils import is_air
 from jwinventoryapi.util.utils import send_ack_packet, get_block_behind
 
 _PLAYER_CONTAINER_ID = 28
+
 
 class Session:
     CONTAINER_ID: int = 2
@@ -98,10 +99,8 @@ class Session:
         pk = InventoryContentPacket(self.CONTAINER_ID)
         for i in range(inventory.size):
             item_stack = inventory.get_item(i)
-            if is_air(item_stack):
-                pk.items.append(ItemStackWrapper(0, item_stack, 0))
-            else:
-                pk.items.append(ItemStackWrapper(self._alloc_stack_id(), item_stack, 0))
+            stack_id = self.container_manager.assign_virtual_slot(i, item_stack)
+            pk.items.append(ItemStackWrapper(stack_id, item_stack))
         self.player.send_packet(pk.get_packet_id(), pk.serialize())
 
     def send_player_inventory(self):
@@ -110,17 +109,15 @@ class Session:
         for i in range(player_inv.size):
             item = player_inv.get_item(i)
             if item is None or is_air(item):
-                pk.items.append(ItemStackWrapper(0, ItemStack("minecraft:air"), 0))
+                pk.items.append(ItemStackWrapper(0, ItemStack("minecraft:air")))
             else:
-                pk.items.append(ItemStackWrapper(self._alloc_stack_id(), item, 0))
+                pk.items.append(ItemStackWrapper(self._alloc_stack_id(), item))
         self.player.send_packet(pk.get_packet_id(), pk.serialize())
 
     def update_slot(self, slot: int):
         item = self.menu.inventory.get_item(slot)
-        if is_air(item):
-            pk = InventorySlotPacket(self.CONTAINER_ID, slot, item=ItemStackWrapper(0, item, 0))
-        else:
-            pk = InventorySlotPacket(self.CONTAINER_ID, slot, item=ItemStackWrapper(self._alloc_stack_id(), item, 0))
+        stack_id = self.container_manager.assign_virtual_slot(slot, item)
+        pk = InventorySlotPacket(self.CONTAINER_ID, slot=slot, item=ItemStackWrapper(stack_id, item))
         self.player.send_packet(pk.get_packet_id(), pk.serialize())
 
     def close(self, sync_inventory: bool = False):

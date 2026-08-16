@@ -4,7 +4,7 @@ from jwinventoryapi.listener import EventListener
 
 class JWInventoryAPI(Plugin):
     prefix = "JWInventoryAPI"
-    api_version = "0.10"
+    api_version = "0.11"
     load = "POSTWORLD"
 
     instance: 'JWInventoryAPI' = None

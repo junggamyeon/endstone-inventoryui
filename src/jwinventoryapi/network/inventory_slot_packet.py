@@ -37,7 +37,7 @@ class InventorySlotPacket(Packet):
         stream.write_bool(self.storage is not None)
         if self.storage is not None:
             self.storage.write(stream)
-        self.item.write_descriptor(stream)
+        self.item.write(stream)
 
     def read(self, stream: ReadOnlyBinaryStream) -> None:
         pass

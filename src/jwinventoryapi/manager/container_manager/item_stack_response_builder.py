@@ -48,12 +48,13 @@ class ItemStackResponseBuilder:
             for slot in slots.values():
                 item = self._container_manager.get_item_at(container_enum, slot)
                 stack_id = self._tracker.get_stack_id(container_enum, slot)
+                is_empty = item is None or is_air(item)
                 custom_name = self._get_custom_name(item)
                 slot_infos.append(ItemStackResponseSlotInfo(
                     slot=slot,
                     hotbar_slot=slot,
-                    count=0 if item is None or is_air(item) else item.amount,
-                    item_stack_id=stack_id,
+                    count=0 if is_empty else item.amount,
+                    item_stack_id=None if is_empty else stack_id,
                     custom_name=custom_name,
                     filtered_custom_name=custom_name,
                     durability_correction=self._get_durability_correction(item),
